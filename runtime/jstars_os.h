@@ -96,8 +96,11 @@ typedef struct {
     uint64_t frames_submitted;   // stereo frames accepted from all ports
     uint64_t frames_rendered;    // frames the device callback has mixed and handed to the device
     uint64_t underruns;          // device callbacks that needed more frames from an active port than it had queued
+    unsigned device_buffer_frames; // buffer size the device granted (frames)
+    unsigned queue_frames;       // per-port queue limit (frames)
     int ports_open;
 } OsAudioStats;
+void os_audio_configure(int queue_ms, int device_ms); // before os_audio_start: per-port queue limit and requested device buffer, ms (0 = keep)
 int os_audio_start(void);                    // opens the default render endpoint (idempotent); 0 on success
 int os_audio_port_new(void);                 // port index (0..7) or -1
 void os_audio_port_free(int port);

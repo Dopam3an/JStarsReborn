@@ -19,7 +19,7 @@ symbol names to log lines.
 | libkernel threads/sync/time/memory/TLS (`jstars_kernel.c`, `jstars_memory.c`, `jstars_evf.c`, `jstars_fs.c`) | Native replacement for the console OS. Mutex/cond/rwlock/attr slots point at padded blocks because the game's libc writes inside them |
 | SystemService/UserService/Sysmodule/Rtc (`jstars_system.c`) | Native replacement; defaults configurable by environment |
 | Pad (`jstars_input.c`) | Native: scripted test input (`--pad-script`, automated), XInput, keyboard. **Not yet exercised by a human**; Mouse is a diagnostic stub |
-| AudioOut (`jstars_av.c`, `jstars_audiohost.c`) | Native: stereo downmix with a soft limiter to WASAPI (shared mode); `--dump-audio` records what the game submitted |
+| AudioOut (`jstars_av.c`, `jstars_audiohost.c`) | Native: stereo downmix (LFE folded in) with a stereo-linked peak limiter to WASAPI (shared mode), 20 ms port queue and 10 ms device buffer (`--audio-queue-ms`, `--audio-buffer-ms`; 85 and 30 restore 0.5.x); `--dump-audio` records what the game submitted |
 | VideoOut + Gnm (GPU) | **shadPS4-derived** command processor, shader translator and Vulkan renderer (`../gpu`, GPL-2.0-or-later), run on Windows. Upstream stubs stay stubs (see `docs/IMPORT_AUDIT.md`) |
 | SaveData (`jstars_savedata.c`), Trophy (`jstars_platform.c`) | Save data implemented over a per-user folder; trophies are an explicitly **empty** registered set (the trophy pack is encrypted and not read) |
 | AvPlayer (`jstars_avplayer.c`) | Diagnostic stub with the game's observed protocol; **movies are not decoded or shown** |

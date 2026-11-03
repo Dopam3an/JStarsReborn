@@ -309,6 +309,8 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--no-keyboard")) rt_input_set_keyboard(0);
         else if (!strcmp(argv[i], "--no-audio")) rt_audio_set_device_enabled(0);
         else if (!strcmp(argv[i], "--dump-audio") && i + 1 < argc) rt_audio_set_dump(argv[++i]);
+        else if (!strcmp(argv[i], "--audio-queue-ms") && i + 1 < argc) rt_audio_set_latency(atoi(argv[++i]), 0);
+        else if (!strcmp(argv[i], "--audio-buffer-ms") && i + 1 < argc) rt_audio_set_latency(0, atoi(argv[++i]));
         else if (!strcmp(argv[i], "--pad-none")) rt_input_set_none(1);
         else if (!strcmp(argv[i], "--count-imports")) rt_thunk_set_counting(1);
         else if (!strcmp(argv[i], "--experiment") && i + 1 < argc) experiments = argv[++i];

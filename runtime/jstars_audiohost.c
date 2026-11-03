@@ -18,7 +18,17 @@
 #include <pthread.h>
 
 #define PORTS 8
-#define RING 4096                      // stereo frames per port (about 85 ms at 48 kHz)
+#define RING 4096                      // ring capacity in stereo frames per port (about 85 ms at 48 kHz); the queue limit below is lower
+// Latency. The game blocks in sceAudioOutOutput until its buffer is queued, so everything queued here is delay between the
+// game producing a sound and hearing it. A console queues a few of the game's own buffers; the 0.5.x runtime let each port
+// fill the whole ring (about 85 ms) on top of a 30 ms device buffer. Defaults are now a 20 ms port queue and a 10 ms device
+// buffer request; --audio-queue-ms 85 --audio-buffer-ms 30 restores the old behaviour if a PC crackles (underruns are logged).
+static unsigned g_queue_frames = 20 * 48;
+static int g_device_ms = 10;
+void os_audio_configure(int queue_ms, int device_ms) {
+    if (queue_ms > 0) { unsigned f = (unsigned)queue_ms * 48u; g_queue_frames = f < 96 ? 96 : f > RING ? RING : f; }
+    if (device_ms > 0) g_device_ms = device_ms < 3 ? 3 : device_ms > 200 ? 200 : device_ms;
+}
 typedef struct { int used; float buf[RING * 2]; unsigned rd, wr; unsigned count; uint64_t last_data_ms; } Port;
 // KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, spelled out here to avoid depending on ksmedia.h's conditional GUID definitions
 static const GUID k_subtype_float = {0x00000003, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
@@ -88,7 +98,7 @@ int os_audio_start(void) {
     wf.Samples.wValidBitsPerSample = 32; wf.dwChannelMask = 0x3; /* SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT */
     wf.SubFormat = k_subtype_float;
     const DWORD flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
-    if (FAILED(IAudioClient_Initialize(g_client, AUDCLNT_SHAREMODE_SHARED, flags, 300000 /* 30 ms */, 0, &wf.Format, NULL))) goto done;
+    if (FAILED(IAudioClient_Initialize(g_client, AUDCLNT_SHAREMODE_SHARED, flags, (REFERENCE_TIME)g_device_ms * 10000 /* 100 ns units */, 0, &wf.Format, NULL))) goto done;
     g_event = CreateEventW(NULL, FALSE, FALSE, NULL);
     if (!g_event || FAILED(IAudioClient_SetEventHandle(g_client, g_event))) goto done;
     if (FAILED(IAudioClient_GetBufferSize(g_client, &g_bufframes))) goto done;
@@ -127,7 +137,9 @@ int os_audio_port_write(int port, const float* stereo, unsigned frames) {
     while (done < frames) {
         Port* pt = &g_port[port];
         if (!pt->used) { pthread_mutex_unlock(&g_mu); return -1; }
-        unsigned room = RING - pt->count;
+        unsigned cap = g_queue_frames > 2 * frames ? g_queue_frames : 2 * frames; // never less than two of the game's buffers
+        if (cap > RING) cap = RING;
+        unsigned room = pt->count < cap ? cap - pt->count : 0;
         if (!room) {
             struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts); ts.tv_nsec += 50 * 1000000; if (ts.tv_nsec >= 1000000000) { ts.tv_nsec -= 1000000000; ts.tv_sec++; }
             pthread_cond_timedwait(&g_space, &g_mu, &ts);
@@ -148,6 +160,8 @@ int os_audio_port_write(int port, const float* stereo, unsigned frames) {
 void os_audio_stats(OsAudioStats* out) {
     pthread_mutex_lock(&g_mu);
     *out = g_stats;
+    out->device_buffer_frames = g_bufframes;
+    out->queue_frames = g_queue_frames;
     out->ports_open = 0;
     for (int i = 0; i < PORTS; ++i) out->ports_open += g_port[i].used;
     pthread_mutex_unlock(&g_mu);
@@ -157,5 +171,6 @@ int os_audio_start(void) { return -1; }
 int os_audio_port_new(void) { return -1; }
 void os_audio_port_free(int port) { (void)port; }
 int os_audio_port_write(int port, const float* stereo, unsigned frames) { (void)port; (void)stereo; (void)frames; return -1; }
+void os_audio_configure(int queue_ms, int device_ms) { (void)queue_ms; (void)device_ms; }
 void os_audio_stats(OsAudioStats* out) { memset(out, 0, sizeof *out); }
 #endif

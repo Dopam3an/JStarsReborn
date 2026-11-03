@@ -85,6 +85,7 @@ void rt_audio_set_device_enabled(int on);    // --no-audio clears it: AudioOut t
 void rt_audio_flush_dump(void);              // before process exit: finalize the --dump-audio WAV headers
 void rt_audio_set_volume(int percent);       // --volume 0..100: output gain applied after the meter and the WAV dump (default 100)
 void rt_audio_set_dump(const char* prefix);  // --dump-audio: per-port stereo S16 WAV of what the game submitted
+void rt_audio_set_latency(int queue_ms, int device_ms); // --audio-queue-ms / --audio-buffer-ms (0 = keep the default 20 / 10)
 // Network layer (jstars_net.c). Off by default: without --online the game gets the offline answers.
 void rt_net_configure(int online, int trace);
 int rt_net_online(void);

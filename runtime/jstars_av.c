@@ -64,6 +64,7 @@ typedef struct {
     float* stereo;               // len * 2 conversion buffer
     double sumsq; float peak, raw_peak, dm_peak; uint64_t metered_frames, total_frames, silent_buffers, limited;
     uint64_t last_report_ms;
+    float lim_gain, lim_release;  // stereo-linked peak limiter: current gain and per-frame release coefficient
     FILE* wav; uint64_t wav_frames; float last_pk;   // --dump-audio: stereo S16 capture of what the game submitted on this port (starts at its first non-silent buffer)
 } AoPort;
 static AoPort ao[8];
@@ -78,6 +79,7 @@ static char g_dump_prefix[512];
 static float g_volume = 1.0f;
 void rt_audio_set_volume(int percent) { g_volume = (percent < 0 ? 0 : percent > 100 ? 100 : percent) / 100.0f; }
 void rt_audio_set_dump(const char* prefix) { snprintf(g_dump_prefix, sizeof g_dump_prefix, "%s", prefix); }
+void rt_audio_set_latency(int queue_ms, int device_ms) { os_audio_configure(queue_ms, device_ms); }
 static void wav_header(FILE* f, uint32_t rate, uint64_t frames) {
     uint32_t data = (uint32_t)(frames * 4), riff = 36 + data, br = rate * 4; uint16_t fmt = 1, ch = 2, ba = 4, bits = 16; uint32_t fl = 16;
     long pos = ftell(f); fseek(f, 0, SEEK_SET);
@@ -120,6 +122,7 @@ static int GUEST_ABI a_open(int user, int type, int index, uint32_t len, uint32_
     for (int i = 0; i < 8; ++i) if (!ao[i].open) {
         ao[i] = (AoPort){.open = 1, .len = len, .freq = freq, .param = param, .host_port = -1, .channels = ch[fmt], .is_float = fmt >= 3};
         ao[i].stereo = malloc((size_t)len * 2 * sizeof(float));
+        ao[i].lim_gain = 1.0f; ao[i].lim_release = expf(-1.0f / (0.080f * (float)freq)); // 80 ms release
         h = i + 1; break;
     }
     pthread_mutex_unlock(&ao_lock);
@@ -134,6 +137,9 @@ static int GUEST_ABI a_open(int user, int type, int index, uint32_t len, uint32_
     OsAudioStats st; os_audio_stats(&st);
     rt_logf("sceAudioOutOpen(type %d, %u frames, %u Hz, format %u = %u ch %s) -> %d [%s%s%s]", type, len, freq, param, p->channels,
             p->is_float ? "float" : "s16", h, mode, p->host_port >= 0 ? ": " : "", p->host_port >= 0 ? st.device : "");
+    if (p->host_port >= 0)
+        rt_logf("audio latency: port queue limit %u frames (%.1f ms), device buffer %u frames (%.1f ms)", st.queue_frames, st.queue_frames / 48.0,
+                st.device_buffer_frames, st.device_buffer_frames / 48.0);
     return h;
 }
 static void ao_convert(AoPort* p, const void* buf) {
@@ -148,18 +154,24 @@ static void ao_convert(AoPort* p, const void* buf) {
         float l, r;
         if (c == 1) { l = r = f[0]; }
         else if (c == 2) { l = f[0]; r = f[1]; }
-        else { // 8 channels: front L/R, centre, LFE, then four surround channels in console order (L, R pairs); LFE is dropped
-            l = f[0] + k * f[2] + k * f[4] + k * f[6];
-            r = f[1] + k * f[2] + k * f[5] + k * f[7];
+        else { // 8 channels: front L/R, centre, LFE, then four surround channels in console order (L, R pairs)
+            // LFE is folded into both sides at -6 dB; dropping it (0.5.x) removed the low end of hits and explosions.
+            l = f[0] + k * f[2] + 0.5f * f[3] + k * f[4] + k * f[6];
+            r = f[1] + k * f[2] + 0.5f * f[3] + k * f[5] + k * f[7];
         }
-        // The 7.1 -> stereo sum can exceed full scale (observed peak 1.04 in the first battle, run bd7ec2). Samples above 0.9 are
-        // soft-limited (tanh knee, asymptote 1.0) instead of being hard-clipped by the device or the WAV writer; the pre-limiter
-        // peak and the number of limited samples are reported so the effect is visible.
+        // The 7.1 -> stereo sum regularly exceeds full scale in battle (downmix peaks around 3.2 were measured). 0.5.x bent every
+        // sample above 0.9 through a tanh knee, which flattens loud passages into distortion. This is a stereo-linked peak
+        // limiter instead: the gain drops at once to keep the louder side at 0.95 and recovers over about 80 ms, so the waveform
+        // keeps its shape and both sides keep their balance. The pre-limiter peak and the limited sample count are still reported.
         float al = l < 0 ? -l : l, ar = r < 0 ? -r : r;
         if (al > p->dm_peak) p->dm_peak = al;
         if (ar > p->dm_peak) p->dm_peak = ar;
-        if (al > 0.9f) { l = (l < 0 ? -1.0f : 1.0f) * (0.9f + 0.1f * tanhf((al - 0.9f) * 10.0f)); p->limited++; }
-        if (ar > 0.9f) { r = (r < 0 ? -1.0f : 1.0f) * (0.9f + 0.1f * tanhf((ar - 0.9f) * 10.0f)); p->limited++; }
+        const float thr = 0.95f;
+        float pk = al > ar ? al : ar;
+        float target = pk > thr ? thr / pk : 1.0f;
+        if (target < p->lim_gain) p->lim_gain = target;
+        else p->lim_gain = target - (target - p->lim_gain) * p->lim_release;
+        if (p->lim_gain < 0.9999f) { l *= p->lim_gain; r *= p->lim_gain; p->limited += 2; }
         o[i * 2] = l; o[i * 2 + 1] = r;
     }
 }
